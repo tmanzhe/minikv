@@ -34,4 +34,33 @@ uv run --no-sync python -m pytest
 
 The compatibility test uses a local `redis-cli` and skips if it isn't installed.
 
+## Versioned cache
+
+Based on [Meta's cache race](https://engineering.fb.com/2022/06/08/core-infra/cache-made-consistent/).
+`SETIFNEWER key value version` returns 1 if it installs the value, or 0 if
+the version is equal to or older than the key's last version.
+`GETVERSIONED key` returns `[value, version]`, or null if absent.
+Versions are caller-supplied integers from 0 through 9223372036854775807.
+Each command runs atomically in the server's event loop.
+
+`INVALIDATE key version` drops values through that version and keeps a version
+marker, even for a missing key. It returns 1 if it changes the key, otherwise 0.
+An older invalidation leaves a newer value alone. A refill needs a strictly
+higher version than the marker. `DEL` keeps the last version too. Plain `SET`
+advances it by one, starting at 0, and returns an error if versions run out.
+
+```text
+slow fill             update client          cache
+capture old value v1
+                      SETIFNEWER new v2  ->  new v2
+                      INVALIDATE v2      ->  empty, marker v2
+SETIFNEWER old v1                        ->  rejected, still empty
+```
+
+The installed-wheel suite: 86 passed, 0 failed, 1 skipped (`redis-cli` missing).
+16 fixed seeds cover 1,024 concurrent fill/update/invalidate races: 3,072 racing
+commands plus 1,024 stale-fill probes, with zero stale overwrites. Two forced
+slow-fill tests cover an acknowledged update with and without invalidation.
+Markers stay in memory until restart. There is no backend or eviction here.
+
 MIT licensed. See [LICENSE](LICENSE).
