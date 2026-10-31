@@ -4,6 +4,7 @@ import argparse
 import asyncio
 
 from .resp import Error, ProtocolError, SimpleString, encode, read
+from .store import MAX_VERSION, Store
 
 
 def execute(request, store):
@@ -13,7 +14,10 @@ def execute(request, store):
         return Error("ERR command must be a non-empty array of bulk strings")
     command, *args = request
     command = command.upper()
-    arities = {b"PING": (0, 1), b"ECHO": (1,), b"GET": (1,), b"SET": (2,)}
+    arities = {
+        b"PING": (0, 1), b"ECHO": (1,), b"GET": (1,), b"SET": (2,),
+        b"GETVERSIONED": (1,), b"SETIFNEWER": (3,), b"INVALIDATE": (2,),
+    }
     if command in arities:
         valid = len(args) in arities[command]
     elif command in (b"DEL", b"EXISTS"):
@@ -28,22 +32,35 @@ def execute(request, store):
         return args[0]
     if command == b"GET":
         return store.get(args[0])
+    if command == b"GETVERSIONED":
+        return store.get_versioned(args[0])
+    if command in (b"SETIFNEWER", b"INVALIDATE"):
+        raw_version = args[-1]
+        try:
+            if not raw_version.isdigit():
+                raise ValueError
+            version = int(raw_version)
+            if version > MAX_VERSION:
+                raise ValueError
+        except ValueError:
+            return Error("ERR version must be an integer between 0 and 9223372036854775807")
+        if command == b"SETIFNEWER":
+            return store.set_if_newer(args[0], args[1], version)
+        return store.invalidate(args[0], version)
     if command == b"SET":
-        store[args[0]] = args[1]
+        try:
+            store.set(args[0], args[1])
+        except ValueError as exc:
+            return Error(f"ERR {exc}")
         return SimpleString("OK")
     if command == b"EXISTS":
-        return sum(key in store for key in args)
-    deleted = 0
-    for key in args:
-        if key in store:
-            del store[key]
-            deleted += 1
-    return deleted
+        return sum(store.get(key) is not None for key in args)
+    return sum(store.delete(key) for key in args)
 
 
 async def start_server(host="127.0.0.1", port=6379):
     """Start a server with a shared, in-memory store for its clients."""
-    store = {}
+    store = Store()
 
     async def handle(reader, writer):
         try:
