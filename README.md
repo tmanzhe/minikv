@@ -3,6 +3,9 @@
 A tiny, in-memory key-value server for Python 3.12+. It speaks RESP2 over TCP.
 Data lives until the process stops.
 
+You need `uv` and `redis-cli` on your PATH. On Debian or Ubuntu, install
+`redis-cli` with `sudo apt install redis-tools`. On macOS, use `brew install redis`.
+
 ```sh
 uv sync
 uv run minikv --port 6380
@@ -57,7 +60,7 @@ capture old value v1
 SETIFNEWER old v1                        ->  rejected, still empty
 ```
 
-The installed-wheel suite: 86 passed, 0 failed, 1 skipped (`redis-cli` missing).
+The installed-wheel suite: 87 passed, 0 failed, 0 skipped (with `redis-cli`).
 16 fixed seeds cover 1,024 concurrent fill/update/invalidate races: 3,072 racing
 commands plus 1,024 stale-fill probes, with zero stale overwrites. Two forced
 slow-fill tests cover an acknowledged update with and without invalidation.
