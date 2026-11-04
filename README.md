@@ -60,10 +60,46 @@ capture old value v1
 SETIFNEWER old v1                        ->  rejected, still empty
 ```
 
-The installed-wheel suite: 87 passed, 0 failed, 0 skipped (with `redis-cli`).
 16 fixed seeds cover 1,024 concurrent fill/update/invalidate races: 3,072 racing
 commands plus 1,024 stale-fill probes, with zero stale overwrites. Two forced
 slow-fill tests cover an acknowledged update with and without invalidation.
 Markers stay in memory until restart. There is no backend or eviction here.
+
+## Raft
+
+I run three fixed nodes with randomized leader elections and majority commits.
+I send reads through the log too, so they need a quorum. Followers return
+`-MOVED host:port`, or `-ERR no leader` before they know a leader.
+An isolated leader returns `-ERR no quorum; outcome unknown` after three seconds.
+A timed-out command may still commit later; I don't deduplicate retries.
+
+I keep each node's term, vote and log in its own `--data-dir`, using atomic file
+replacement and fsync. After restart I rebuild the in-memory store from committed
+log entries as the node catches up. I use the same RESP TCP port for clients and
+peers, with no authentication or membership changes. Peer addresses must match
+the nodes' `--host` and `--port` values.
+
+I start each node with both other addresses and a separate data directory:
+
+```sh
+uv run minikv --port 6381 --peer 127.0.0.1:6382 --peer 127.0.0.1:6383 --data-dir /tmp/minikv-1
+uv run minikv --port 6382 --peer 127.0.0.1:6381 --peer 127.0.0.1:6383 --data-dir /tmp/minikv-2
+uv run minikv --port 6383 --peer 127.0.0.1:6381 --peer 127.0.0.1:6382 --data-dir /tmp/minikv-3
+```
+
+I use this demo to start three local processes, write, show a follower redirect,
+kill the leader, read the surviving data and clean up:
+
+```sh
+uv run python scripts/demo_raft.py
+```
+
+Tests inject a clock, seeded RNG and queued transport into the Raft core. The
+in-memory network supports partitions, dropped messages and killed nodes; tests
+advance virtual time. Two tests also run three installed CLI nodes over TCP.
+
+### Not included
+
+Snapshots and log compaction are not included.
 
 MIT licensed. See [LICENSE](LICENSE).
